@@ -3,15 +3,38 @@ from flask_cors import CORS
 import tensorflow as tf
 import numpy as np
 import cv2
+import os
+import gdown
+
+# Google Drive model file ID
+MODEL_FILE_ID = '1PEC9LjZvS6ZD9wdbvcW_RruoVTbrCXzZ'
+MODEL_PATH = 'breast_cancer_3modality_fusion.h5'
+
+def download_model_from_drive():
+    """Download model from Google Drive if not present"""
+    if not os.path.exists(MODEL_PATH):
+        print(f"Downloading model from Google Drive... (File ID: {MODEL_FILE_ID})")
+        try:
+            url = f'https://drive.google.com/uc?id={MODEL_FILE_ID}'
+            gdown.download(url, MODEL_PATH, quiet=False)
+            print("Model downloaded successfully!")
+        except Exception as e:
+            print(f"Error downloading model: {e}")
+    else:
+        print(f"Model already exists at {MODEL_PATH}")
 
 app = Flask(__name__)
 CORS(app)
 
+# Download model on startup
+print("Checking model file...")
+download_model_from_drive()
+
 try:
-    model = tf.keras.models.load_model('breast_cancer_3modality_fusion.h5')
+    model = tf.keras.models.load_model(MODEL_PATH)
     print("Model loaded successfully!")
-except:
-    print("Model file not found")
+except Exception as e:
+    print(f"Error loading model: {e}")
     model = None
 
 CLASS_LABELS = ['Benign', 'Malignant', 'Normal']
@@ -29,7 +52,11 @@ def home():
     return jsonify({
         'status': 'online',
         'message': 'Breast Cancer Detection API v1.0',
-        'model_loaded': model is not None
+        'model_loaded': model is not None,
+        'endpoints': {
+            '/': 'API status',
+            '/predict': 'POST image for prediction'
+        }
     })
 
 @app.route('/predict', methods=['POST'])
@@ -63,10 +90,10 @@ def predict():
             'all_predictions': all_predictions,
             'message': f'Detection: {predicted_class} ({confidence:.2f}% confidence)'
         })
+    
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 if __name__ == '__main__':
-    import os
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
