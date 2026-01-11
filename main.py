@@ -15,9 +15,9 @@ def download_model_from_drive():
     if not os.path.exists(MODEL_PATH):
         print(f"Downloading model from Google Drive... (File ID: {MODEL_FILE_ID})")
         try:
-            url = f'https://drive.google.com/uc?id={MODEL_FILE_ID}'
-            gdown.download(url, MODEL_PATH, quiet=False)
-            print("Model downloaded successfully!")
+            import gdown
+                gdown.download(id=MODEL_FILE_ID, output=MODEL_PATH, quiet=False)
+                            print("Model downloaded successfully!")
         except Exception as e:
             print(f"Error downloading model: {e}")
     else:
