@@ -120,7 +120,16 @@ class ModelManager:
                 
                 # Check TensorFlow version and model compatibility
                 logger.info(f"TensorFlow version: {tf.__version__}")
-                logger.info(f"Keras version: {tf.keras.__version__}")
+                try:
+                    keras_version = tf.keras.__version__
+                    logger.info(f"Keras version: {keras_version}")
+                except AttributeError:
+                    # Keras version not available in this TF version
+                    try:
+                        import keras
+                        logger.info(f"Keras version: {keras.__version__}")
+                    except:
+                        logger.info("Keras version: (integrated with TensorFlow)")
                 
                 # Try loading with custom_objects if needed
                 try:
