@@ -94,6 +94,82 @@ class ModelManager:
             logger.error(f"Traceback: {traceback.format_exc()}")
             return False
     
+    def _load_model_with_compatibility_fix(self):
+        """Load model with compatibility fix for batch_shape issue"""
+        import h5py
+        import json
+        import tempfile
+        import shutil
+        
+        try:
+            # Create a temporary copy to modify
+            temp_model_path = Config.MODEL_PATH + '.tmp'
+            shutil.copy2(Config.MODEL_PATH, temp_model_path)
+            
+            # Read the model file and fix the config
+            with h5py.File(temp_model_path, 'r+') as f:
+                # Navigate to model config
+                if 'model_config' in f.attrs:
+                    model_config_str = f.attrs['model_config']
+                    if isinstance(model_config_str, bytes):
+                        model_config_str = model_config_str.decode('utf-8')
+                    model_config = json.loads(model_config_str)
+                    
+                    # Fix InputLayer configs recursively
+                    def fix_layer_config(layer_config):
+                        if isinstance(layer_config, dict):
+                            # Fix InputLayer batch_shape
+                            if layer_config.get('class_name') == 'InputLayer':
+                                if 'config' in layer_config:
+                                    config = layer_config['config']
+                                    if 'batch_shape' in config:
+                                        batch_shape = config['batch_shape']
+                                        if batch_shape and len(batch_shape) > 1:
+                                            config['input_shape'] = batch_shape[1:]
+                                        del config['batch_shape']
+                            
+                            # Recursively fix nested layers
+                            for key, value in layer_config.items():
+                                if isinstance(value, (dict, list)):
+                                    fix_layer_config(value)
+                        elif isinstance(layer_config, list):
+                            for item in layer_config:
+                                fix_layer_config(item)
+                    
+                    fix_layer_config(model_config)
+                    
+                    # Write back the fixed config
+                    f.attrs['model_config'] = json.dumps(model_config).encode('utf-8')
+            
+            # Now load the model with fixed config
+            model = tf.keras.models.load_model(temp_model_path, compile=False)
+            
+            # Clean up temp file
+            try:
+                os.remove(temp_model_path)
+            except:
+                pass
+            
+            return model
+            
+        except Exception as e:
+            logger.warning(f"Compatibility fix method failed: {e}")
+            # Fallback: try loading with custom InputLayer class
+            class CompatibleInputLayer(tf.keras.layers.InputLayer):
+                @classmethod
+                def from_config(cls, config):
+                    if 'batch_shape' in config:
+                        batch_shape = config.pop('batch_shape')
+                        if batch_shape and len(batch_shape) > 1:
+                            config['input_shape'] = tuple(batch_shape[1:])
+                    return super().from_config(config)
+            
+            return tf.keras.models.load_model(
+                Config.MODEL_PATH,
+                compile=False,
+                custom_objects={'InputLayer': CompatibleInputLayer}
+            )
+    
     def load_model(self):
         """Load the TensorFlow model with retry mechanism"""
         if not os.path.exists(Config.MODEL_PATH):
@@ -131,21 +207,28 @@ class ModelManager:
                     except:
                         logger.info("Keras version: (integrated with TensorFlow)")
                 
-                # Try loading with custom_objects if needed
-                try:
-                    self.model = tf.keras.models.load_model(Config.MODEL_PATH, compile=False)
-                except Exception as e1:
-                    logger.warning(f"Standard load failed: {e1}")
-                    logger.info("Trying with safe_mode=False...")
+                # Try loading with different strategies for compatibility
+                load_attempts = [
+                    # Strategy 1: Standard load
+                    lambda: tf.keras.models.load_model(Config.MODEL_PATH, compile=False),
+                    # Strategy 2: With safe_mode=False
+                    lambda: tf.keras.models.load_model(Config.MODEL_PATH, compile=False, safe_mode=False),
+                    # Strategy 3: Handle batch_shape compatibility issue
+                    lambda: self._load_model_with_compatibility_fix(),
+                ]
+                
+                last_error = None
+                for i, load_func in enumerate(load_attempts, 1):
                     try:
-                        self.model = tf.keras.models.load_model(
-                            Config.MODEL_PATH, 
-                            compile=False,
-                            safe_mode=False
-                        )
-                    except Exception as e2:
-                        logger.warning(f"Safe mode load failed: {e2}")
-                        raise e1  # Raise original error
+                        logger.info(f"Trying load strategy {i}...")
+                        self.model = load_func()
+                        logger.info(f"Model loaded successfully with strategy {i}")
+                        break
+                    except Exception as e:
+                        logger.warning(f"Load strategy {i} failed: {str(e)}")
+                        last_error = e
+                        if i == len(load_attempts):
+                            raise last_error
                 
                 # Verify model structure
                 if self.model is None:
