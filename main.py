@@ -32,8 +32,8 @@ logger = logging.getLogger(__name__)
 # ============================================
 class Config:
     """Application configuration"""
-    MODEL_URL = 'https://uaecommerce.s3.ap-southeast-1.amazonaws.com/breast_cancer_3modality_fusion.h5'
-    MODEL_PATH = 'breast_cancer_3modality_fusion.h5'
+    MODEL_URL = 'https://bacbonschool.s3.ap-south-1.amazonaws.com/uploads/e-Teachers_Guide/breast_cancer_balanced_model.h5'
+    MODEL_PATH = 'breast_cancer_balanced_model.h5'
     IMAGE_SIZE = (128, 128)
     CLASS_LABELS = ['Benign', 'Malignant', 'Normal']
     MAX_IMAGE_SIZE_MB = 10
