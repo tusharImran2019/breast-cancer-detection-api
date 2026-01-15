@@ -417,6 +417,72 @@ class PredictionService:
     
     def __init__(self, model_manager):
         self.model_manager = model_manager
+        self._model_input_info = None
+    
+    def _get_model_input_info(self):
+        """Get information about model inputs"""
+        if self._model_input_info is not None:
+            return self._model_input_info
+        
+        model = self.model_manager.model
+        if model is None:
+            return None
+        
+        # Check if model has multiple inputs
+        try:
+            if hasattr(model, 'inputs') and model.inputs:
+                inputs = model.inputs
+                self._model_input_info = {
+                    'num_inputs': len(inputs),
+                    'input_shapes': [inp.shape.as_list() if hasattr(inp.shape, 'as_list') else list(inp.shape) for inp in inputs],
+                    'input_names': [inp.name for inp in inputs]
+                }
+                logger.info(f"Model has {len(inputs)} inputs: {self._model_input_info}")
+            else:
+                self._model_input_info = {
+                    'num_inputs': 1,
+                    'input_shapes': [model.input_shape if hasattr(model, 'input_shape') else None],
+                    'input_names': ['input']
+                }
+        except Exception as e:
+            logger.warning(f"Could not get model input info: {e}")
+            self._model_input_info = {'num_inputs': 1, 'input_shapes': [None], 'input_names': ['input']}
+        
+        return self._model_input_info
+    
+    def _prepare_multi_input(self, processed_image):
+        """Prepare inputs for multi-input model (3-Modality Fusion)"""
+        input_info = self._get_model_input_info()
+        
+        if input_info is None or input_info['num_inputs'] == 1:
+            return processed_image
+        
+        # Model expects multiple inputs (Image, Clinical, Genetic)
+        num_inputs = input_info['num_inputs']
+        input_shapes = input_info['input_shapes']
+        
+        logger.info(f"Preparing {num_inputs} inputs for multi-modality model")
+        
+        inputs = []
+        for i, shape in enumerate(input_shapes):
+            if shape is None:
+                inputs.append(processed_image)
+                continue
+            
+            # Check if this is the image input (typically has 4 dimensions: batch, height, width, channels)
+            if len(shape) == 4 and shape[-1] == 3:
+                # This is the image input
+                inputs.append(processed_image)
+                logger.info(f"Input {i}: Image input with shape {shape}")
+            else:
+                # Create dummy input for clinical/genetic data
+                # Shape is typically [None, num_features] or [batch, num_features]
+                dummy_shape = [1] + [s if s is not None else 1 for s in shape[1:]]
+                dummy_input = np.zeros(dummy_shape, dtype=np.float32)
+                inputs.append(dummy_input)
+                logger.info(f"Input {i}: Dummy input created with shape {dummy_shape}")
+        
+        return inputs
     
     def predict(self, processed_image):
         """Make prediction on preprocessed image"""
@@ -424,8 +490,11 @@ class PredictionService:
             if not self.model_manager.model_loaded:
                 return None, "Model not loaded"
             
+            # Prepare inputs (handles multi-input models)
+            model_inputs = self._prepare_multi_input(processed_image)
+            
             # Get predictions
-            predictions = self.model_manager.model.predict(processed_image, verbose=0)
+            predictions = self.model_manager.model.predict(model_inputs, verbose=0)
             
             # Extract results
             predicted_idx = np.argmax(predictions[0])
@@ -449,6 +518,7 @@ class PredictionService:
             
         except Exception as e:
             logger.error(f"Prediction error: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return None, f"Prediction failed: {str(e)}"
 
 # ============================================
