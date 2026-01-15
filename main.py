@@ -115,7 +115,26 @@ class ModelManager:
                         model_config_str = model_config_str.decode('utf-8')
                     model_config = json.loads(model_config_str)
                     
-                    # Fix InputLayer configs recursively
+                    # Fix layer configs recursively
+                    def fix_dtype_policy(obj):
+                        """Recursively fix DTypePolicy objects"""
+                        if isinstance(obj, dict):
+                            # Check if this is a DTypePolicy object
+                            if obj.get('class_name') == 'DTypePolicy':
+                                # Convert to string dtype
+                                dtype_name = obj.get('config', {}).get('name', 'float32')
+                                return dtype_name
+                            
+                            # Recursively process all values
+                            fixed_obj = {}
+                            for key, value in obj.items():
+                                fixed_obj[key] = fix_dtype_policy(value)
+                            return fixed_obj
+                        elif isinstance(obj, list):
+                            return [fix_dtype_policy(item) for item in obj]
+                        else:
+                            return obj
+                    
                     def fix_layer_config(layer_config):
                         if isinstance(layer_config, dict):
                             # Fix InputLayer batch_shape
@@ -128,6 +147,10 @@ class ModelManager:
                                             config['input_shape'] = batch_shape[1:]
                                         del config['batch_shape']
                             
+                            # Fix DTypePolicy recursively in config
+                            if 'config' in layer_config:
+                                layer_config['config'] = fix_dtype_policy(layer_config['config'])
+                            
                             # Recursively fix nested layers
                             for key, value in layer_config.items():
                                 if isinstance(value, (dict, list)):
@@ -136,6 +159,9 @@ class ModelManager:
                             for item in layer_config:
                                 fix_layer_config(item)
                     
+                    # First fix DTypePolicy in the entire config
+                    model_config = fix_dtype_policy(model_config)
+                    # Then fix layer-specific issues
                     fix_layer_config(model_config)
                     
                     # Write back the fixed config
@@ -154,21 +180,51 @@ class ModelManager:
             
         except Exception as e:
             logger.warning(f"Compatibility fix method failed: {e}")
-            # Fallback: try loading with custom InputLayer class
-            class CompatibleInputLayer(tf.keras.layers.InputLayer):
-                @classmethod
-                def from_config(cls, config):
-                    if 'batch_shape' in config:
-                        batch_shape = config.pop('batch_shape')
-                        if batch_shape and len(batch_shape) > 1:
-                            config['input_shape'] = tuple(batch_shape[1:])
-                    return super().from_config(config)
-            
+            # Fallback: try loading with custom objects
+            return self._load_model_with_custom_objects()
+    
+    def _load_model_with_custom_objects(self):
+        """Load model with custom objects for compatibility"""
+        # Create custom objects to handle compatibility issues
+        custom_objects = {}
+        
+        # Custom InputLayer to handle batch_shape
+        class CompatibleInputLayer(tf.keras.layers.InputLayer):
+            @classmethod
+            def from_config(cls, config):
+                if 'batch_shape' in config:
+                    batch_shape = config.pop('batch_shape')
+                    if batch_shape and len(batch_shape) > 1:
+                        config['input_shape'] = tuple(batch_shape[1:])
+                return super().from_config(config)
+        custom_objects['InputLayer'] = CompatibleInputLayer
+        
+        # Handle DTypePolicy - convert to string dtype
+        class DTypePolicyCompat:
+            def __init__(self, name='float32'):
+                self.name = name
+            @classmethod
+            def from_config(cls, config):
+                return cls(config.get('name', 'float32'))
+        
+        # Try loading with custom objects
+        try:
             return tf.keras.models.load_model(
                 Config.MODEL_PATH,
                 compile=False,
-                custom_objects={'InputLayer': CompatibleInputLayer}
+                custom_objects=custom_objects
             )
+        except Exception as e:
+            logger.warning(f"Loading with custom objects failed: {e}")
+            # Last resort: try with compile=False and safe_mode=False
+            try:
+                return tf.keras.models.load_model(
+                    Config.MODEL_PATH,
+                    compile=False,
+                    safe_mode=False
+                )
+            except:
+                raise e
     
     def load_model(self):
         """Load the TensorFlow model with retry mechanism"""
